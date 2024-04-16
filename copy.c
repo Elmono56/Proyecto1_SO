@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
 
 // cantidad maxima de procesos hijos
 #define MAX_PROCESS 10
@@ -24,13 +26,13 @@ void copiar_archivo(int pCola, int pKey, int pPPID) {
 
 	struct rutas msg;
 	// mensaje contiene ruta de archivo
-   	if (msgrcv(pCola, &msg, sizeof(struct mensaje), pPPID, 0) == -1) {
+   	if (msgrcv(pCola, &msg, sizeof(struct rutas), pPPID, 0) == -1) {
     	perror("Error al recibir el mensaje\n");
 		exit(EXIT_FAILURE);
     };
 
-	char *rutaOrigen = msg->ruta1;
-	char *rutaDestino = msg->ruta2;
+	char *rutaOrigen = msg.ruta1;
+	char *rutaDestino = msg.ruta2;
 
     FILE *origen = fopen(rutaOrigen, "rb");
     if (!origen) {
@@ -60,7 +62,7 @@ void copiar_archivo(int pCola, int pKey, int pPPID) {
             exit(EXIT_FAILURE);
         };
     };
-	print("Archivo copiado exitosamente");
+	printf("Archivo copiado exitosamente");
 
     fclose(origen);
     fclose(destino);
@@ -74,11 +76,11 @@ void leerRuta1(const char *rutaOrigen, const char *rutaDestino, int pCola, int p
     if (!dir) {
         perror("Error al abrir el directorio de origen");
         exit(EXIT_FAILURE);
-    }
+    };
     if (mkdir(rutaDestino, 0777) == -1 && errno != EEXIST) {
         perror("Error al crear el directorio de destino");
         exit(EXIT_FAILURE);
-    }
+    };
 
     struct dirent *dp;
     while ((dp = readdir(dir)) != NULL) {
@@ -98,22 +100,22 @@ void leerRuta1(const char *rutaOrigen, const char *rutaDestino, int pCola, int p
         if (stat(rutaOrigenCompleta, &info) == -1) {
             perror("Error al obtener información del archivo/directorio de origen");
             exit(EXIT_FAILURE);
-        }
+        };
 
-		// si es subdirectorio se llama nuevamente esta función
+	// si es subdirectorio se llama nuevamente esta función
         if (S_ISDIR(info.st_mode)) {
             copiar_directorio(rutaOrigenCompleta, rutaDestinoCompleta, pCola, pKey, pPPID);
-        };
-		// si es archivo se envía un mensaje a la cola
-		else if (S_ISREG(info.st_mode)) {
+        }
+	// si es archivo se envía un mensaje a la cola
+	else if(S_ISREG(info.st_mode)) {
 
-			// crear ruta del archivo
-            struct rutas msg = {*rutaOrigenCompleta, *rutaDestinoCompleta};
-			// enviar ruta a la cola y validar si hay fallo
-			if (msgsnd(pCola, &msg, sizeof(struct rutas), pPPID) == -1) {
-				perror("Error al enviar el mensaje\n");
-				exit(EXIT_FAILURE);
-			};
+		// crear ruta del archivo
+		struct rutas msg = {*rutaOrigenCompleta, *rutaDestinoCompleta};
+		// enviar ruta a la cola y validar si hay fallo
+		if (msgsnd(pCola, &msg, sizeof(struct rutas), pPPID) == -1) {
+			perror("Error al enviar el mensaje\n");
+			exit(EXIT_FAILURE);
+		};
         };
     };
 
@@ -127,7 +129,7 @@ void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
 	key_t msg_key = (pCantProcesos*10);
 	int cola = msgget(msg_key, 0666 | IPC_CREAT);
 
-	leerRuta1(pRutaO, pRutaD, cola, msg_key, get_pid());
+	leerRuta1(pRutaO, pRutaD, cola, msg_key, getppid());
 	
 	// Crear pool de procesos estático
     pid_t pids[MAX_PROCESS];
@@ -136,10 +138,9 @@ void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
         if (pids[i] == -1) {
             perror("Error al crear el proceso hijo");
             exit(EXIT_FAILURE);
-        };
-		else if (pids[i] == 0) {
-			while (col)
-        	copiar_archivo(int pCola, int pKey, int pPPID)
+        }
+	else if (pids[i] == 0) {
+            copiar_archivo(cola, msg_key, getppid());
         };
     };
 
@@ -150,7 +151,7 @@ void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
         };
     };
 	// esperar a que los hilos terminen
-	for (int i = 0; i < cantP; i++) wait(NULL);
+	for (int i = 0; i < MAX_PROCESS; i++) wait(NULL);
 	// Liberar recursos compartidos
 	shmctl(cola, IPC_RMID, NULL);
 
@@ -159,17 +160,17 @@ void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
 
 
 // funcion auxiliar: medir tiempo de ejecucion
-void medirTiempo(struct rutas* pRutas){
+void medirTiempo(int pCantProcesos, char* pRutaO, char* pRutaD){
 	//iniciar contador
 	time_t inicio = time(NULL);
 	 
-	iniciarCopy(pRutas);
+	iniciarCopy(pCantProcesos, pRutaO, pRutaD);
  	
  	// terminar contador
 	time_t fin = time(NULL);
 	
 	// medir diferencia
-	printf("\n Con %i procesos se necesitaron %d segundos", pRutas->cantP, (fin - inicio));
+	printf("\n Con %i procesos se necesitaron %d segundos", MAX_PROCESS, (fin - inicio));
 };
 
 
