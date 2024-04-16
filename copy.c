@@ -69,7 +69,7 @@ void copiar_archivo(int pCola, int pKey, int pPPID) {
 }
 
 // funcion auxiliar para extraer el nombre de archivos en ruta
-void leerRuta1(const char *rutaOrigen, const char *rutaDestino, int pCola, int pKey, int pPPID){
+void leerRuta(const char *rutaOrigen, const char *rutaDestino, int pCola, int pKey, int pPPID){
 	
 	// validaciones de rutas
     DIR *dir = opendir(rutaOrigen);
@@ -104,7 +104,7 @@ void leerRuta1(const char *rutaOrigen, const char *rutaDestino, int pCola, int p
 
 	// si es subdirectorio se llama nuevamente esta función
         if (S_ISDIR(info.st_mode)) {
-            copiar_directorio(rutaOrigenCompleta, rutaDestinoCompleta, pCola, pKey, pPPID);
+            leerRuta(rutaOrigenCompleta, rutaDestinoCompleta, pCola, pKey, pPPID);
         }
 	// si es archivo se envía un mensaje a la cola
 	else if(S_ISREG(info.st_mode)) {
@@ -129,7 +129,7 @@ void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
 	key_t msg_key = (pCantProcesos*10);
 	int cola = msgget(msg_key, 0666 | IPC_CREAT);
 
-	leerRuta1(pRutaO, pRutaD, cola, msg_key, getppid());
+	leerRuta(pRutaO, pRutaD, cola, msg_key, getppid());
 	
 	// Crear pool de procesos estático
     pid_t pids[MAX_PROCESS];
