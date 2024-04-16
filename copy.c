@@ -8,28 +8,46 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 
-#define MAX_PROCESS 4
+// cantidad maxima de procesos hijos
+#define MAX_PROCESS 10
 
-void copiar_archivo(const char *rutaOrigen, const char *rutaDestino) {
+// struct para almacenar las rutas para cada archivo
+struct rutas {
+    char* ruta1;
+    char* ruta2;
+};
+
+// funcio de copiar un archivo
+void copiar_archivo(int pCola, int pKey, int pPPID) {
+
+	struct rutas msg;
+	// mensaje contiene ruta de archivo
+   	if (msgrcv(pCola, &msg, sizeof(struct mensaje), pPPID, 0) == -1) {
+    	perror("Error al recibir el mensaje\n");
+		exit(EXIT_FAILURE);
+    };
+
+	char *rutaOrigen = msg->ruta1;
+	char *rutaDestino = msg->ruta2;
+
     FILE *origen = fopen(rutaOrigen, "rb");
     if (!origen) {
         perror("Error al abrir el archivo de origen");
         exit(EXIT_FAILURE);
-    }
-
+    };
     FILE *destino = fopen(rutaDestino, "wb");
     if (!destino) {
         fclose(origen);
         perror("Error al crear el archivo de destino");
         exit(EXIT_FAILURE);
-    }
+    };
 
     // Obtener tamaño del archivo
     fseek(origen, 0, SEEK_END);
     long filesize = ftell(origen);
     fseek(origen, 0, SEEK_SET);
-
     printf("Copiando archivo: %s (%ld bytes)\n", rutaOrigen, filesize);
 
     char buffer[4096];
@@ -40,20 +58,23 @@ void copiar_archivo(const char *rutaOrigen, const char *rutaDestino) {
             fclose(origen);
             fclose(destino);
             exit(EXIT_FAILURE);
-        }
-    }
+        };
+    };
+	print("Archivo copiado exitosamente");
 
     fclose(origen);
     fclose(destino);
 }
 
-void copiar_directorio(const char *rutaOrigen, const char *rutaDestino) {
+// funcion auxiliar para extraer el nombre de archivos en ruta
+void leerRuta1(const char *rutaOrigen, const char *rutaDestino, int pCola, int pKey, int pPPID){
+	
+	// validaciones de rutas
     DIR *dir = opendir(rutaOrigen);
     if (!dir) {
         perror("Error al abrir el directorio de origen");
         exit(EXIT_FAILURE);
     }
-
     if (mkdir(rutaDestino, 0777) == -1 && errno != EEXIST) {
         perror("Error al crear el directorio de destino");
         exit(EXIT_FAILURE);
@@ -63,11 +84,13 @@ void copiar_directorio(const char *rutaOrigen, const char *rutaDestino) {
     while ((dp = readdir(dir)) != NULL) {
         if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
-        }
+        };
 
+		// crear ruta de origen para el archivo
         char rutaOrigenCompleta[PATH_MAX];
         snprintf(rutaOrigenCompleta, PATH_MAX, "%s/%s", rutaOrigen, dp->d_name);
 
+		// crear ruta de destino para el archivo
         char rutaDestinoCompleta[PATH_MAX];
         snprintf(rutaDestinoCompleta, PATH_MAX, "%s/%s", rutaDestino, dp->d_name);
 
@@ -77,86 +100,90 @@ void copiar_directorio(const char *rutaOrigen, const char *rutaDestino) {
             exit(EXIT_FAILURE);
         }
 
+		// si es subdirectorio se llama nuevamente esta función
         if (S_ISDIR(info.st_mode)) {
-            copiar_directorio(rutaOrigenCompleta, rutaDestinoCompleta);
-        } else if (S_ISREG(info.st_mode)) {
-            copiar_archivo(rutaOrigenCompleta, rutaDestinoCompleta);
-        }
-    }
+            copiar_directorio(rutaOrigenCompleta, rutaDestinoCompleta, pCola, pKey, pPPID);
+        };
+		// si es archivo se envía un mensaje a la cola
+		else if (S_ISREG(info.st_mode)) {
+
+			// crear ruta del archivo
+            struct rutas msg = {*rutaOrigenCompleta, *rutaDestinoCompleta};
+			// enviar ruta a la cola y validar si hay fallo
+			if (msgsnd(pCola, &msg, sizeof(struct rutas), pPPID) == -1) {
+				perror("Error al enviar el mensaje\n");
+				exit(EXIT_FAILURE);
+			};
+        };
+    };
 
     closedir(dir);
-}
+    
+};
 
-int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Uso: %s ruta_origen ruta_destino\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
+// funcion inicial: llama auxiliares
+void iniciarCopy(int pCantProcesos, char* pRutaO, char* pRutaD){
 
-    char *rutaOrigen = argv[1];
-    char *rutaDestino = argv[2];
+	key_t msg_key = (pCantProcesos*10);
+	int cola = msgget(msg_key, 0666 | IPC_CREAT);
 
-    // Crear pool de procesos estático
+	leerRuta1(pRutaO, pRutaD, cola, msg_key, get_pid());
+	
+	// Crear pool de procesos estático
     pid_t pids[MAX_PROCESS];
     for (int i = 0; i < MAX_PROCESS; ++i) {
         pids[i] = fork();
         if (pids[i] == -1) {
             perror("Error al crear el proceso hijo");
             exit(EXIT_FAILURE);
-        } else if (pids[i] == 0) {
-            // Proceso hijo
-
-            // Asignar trabajo al proceso hijo
-            DIR *dir = opendir(rutaOrigen);
-            if (!dir) {
-                perror("Error al abrir el directorio de origen");
-                exit(EXIT_FAILURE);
-            }
-
-            struct dirent *dp;
-            while ((dp = readdir(dir)) != NULL) {
-                if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
-                    continue;
-                }
-
-                char rutaOrigenCompleta[PATH_MAX];
-                snprintf(rutaOrigenCompleta, PATH_MAX, "%s/%s", rutaOrigen, dp->d_name);
-
-                char rutaDestinoCompleta[PATH_MAX];
-                snprintf(rutaDestinoCompleta, PATH_MAX, "%s/%s", rutaDestino, dp->d_name);
-
-                struct stat info;
-                if (stat(rutaOrigenCompleta, &info) == -1) {
-                    perror("Error al obtener información del archivo/directorio de origen");
-                    exit(EXIT_FAILURE);
-                }
-
-                if (S_ISDIR(info.st_mode)) {
-                    // Si es un directorio
-                    copiar_directorio(rutaOrigenCompleta, rutaDestinoCompleta);
-                    continue;
-                } else if (S_ISREG(info.st_mode)) {
-                    // Si es un archivo, copiarlo
-                    copiar_archivo(rutaOrigenCompleta, rutaDestinoCompleta);
-                }
-            }
-
-            // Cerrar el directorio de origen
-            closedir(dir);
-
-            // Terminar el proceso hijo después de copiar los archivos
-            exit(EXIT_SUCCESS);
-        }
-    }
+        };
+		else if (pids[i] == 0) {
+			while (col)
+        	copiar_archivo(int pCola, int pKey, int pPPID)
+        };
+    };
 
     // Cerrar los directorios de los procesos padre
     for (int i = 0; i < MAX_PROCESS; ++i) {
         if (pids[i] != 0) {
             waitpid(pids[i], NULL, 0);
-        }
+        };
+    };
+	// esperar a que los hilos terminen
+	for (int i = 0; i < cantP; i++) wait(NULL);
+	// Liberar recursos compartidos
+	shmctl(cola, IPC_RMID, NULL);
+
+	printf("Copiado completado!\n");
+};
+
+
+// funcion auxiliar: medir tiempo de ejecucion
+void medirTiempo(struct rutas* pRutas){
+	//iniciar contador
+	time_t inicio = time(NULL);
+	 
+	iniciarCopy(pRutas);
+ 	
+ 	// terminar contador
+	time_t fin = time(NULL);
+	
+	// medir diferencia
+	printf("\n Con %i procesos se necesitaron %d segundos", pRutas->cantP, (fin - inicio));
+};
+
+
+int main(int argc, char *argv[]) {
+	if (argc != 3) {
+        fprintf(stderr, "Uso: %s ruta_origen ruta_destino\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
 
-    printf("Copiado completado!\n");
-
-    return 0;
-}
+    char *rutaOrigen = argv[1];
+    char *rutaDestino = argv[2];
+  
+  //prueba unitaria (funcionamiento)
+  iniciarCopy(MAX_PROCESS, rutaOrigen, rutaDestino);
+  
+  return 0;
+};
