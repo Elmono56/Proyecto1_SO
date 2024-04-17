@@ -13,7 +13,7 @@
 #include <sys/wait.h>
 #include <sys/msg.h>
 
-#define MAX_PROCESS 4
+#define MAX_PROCESS 9
 #define MAX_PATH_LEN 512
 
 struct message {
@@ -121,6 +121,10 @@ void procesar_archivo(int qid) {
 }
 
 int main(int argc, char *argv[]) {
+    
+    //iniciar contador
+    time_t inicio = time(NULL);	
+
     if (argc != 3) {
         fprintf(stderr, "Uso: %s ruta_origen ruta_destino\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -167,6 +171,12 @@ int main(int argc, char *argv[]) {
 
     // Eliminar el mensaje de la cola
     msgctl(qid, IPC_RMID, NULL);
+    
+    // terminar contador
+    time_t fin = time(NULL);
+    
+    // medir diferenciap
+    printf("\n Con %i procesos se necesitaron %d segundos para copiar todo el directorio", MAX_PROCESS, (fin - inicio));
 
     return 0;
 }
